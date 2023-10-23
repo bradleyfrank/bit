@@ -5,41 +5,58 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 import inquirer
-#from iterfzf import iterfzf
 from colorama import init, Fore
 
+C = TypeVar("C", bound=Callable)
 
-def proc(cmd: str) -> dict:
+
+class GitRepo():
+    def __init__(self, repository: Path) -> None:
+        self.repo = repository
+        self.toplevel = show_toplevel()
+        self.name = self.repo_name()
+
+    def git_toplevel(self) -> Path:
+        return Path(proc("git rev-parse --show-toplevel"))
+
+    def git_repo_name(worktree_path: Path) -> str:
+        result = proc(f"git --work-tree {str(worktree_path).strip()} config --get remote.origin.url")
+        return Path(result["stdout"]).stem if result["rc"] == 0 else None
+
+
+    def git_worktree_add(toplevel: Path, worktree_name: str) -> Path:
+        branch_path = f"{str(toplevel.parent).strip()}/{worktree_name}"
+        worktree_dir = str(toplevel).strip()
+        result = proc(f"git --work-tree {worktree_dir} worktree add {branch_path}")
+        if result["rc"] != 0:
+            raise SystemExit(Fore.RED + result["stderr"])
+        return Path(branch_path)
+
+
+def read_git_repo(func: C) -> C:
+    def inner(flags):
+        try:
+            repository = Repo(Path.cwd())
+        except InvalidGitRepositoryError:
+            raise SystemExit(Fore.RED + "Not in a Git repository")
+        return func(flags, repository)
+
+    return inner
+
+
+def proc(cmd: str) -> bool:
     out = subprocess.run(cmd.split(), capture_output=True, check=False)
-    return {
-        "rc": out.returncode,
-        "stdout": out.stdout.decode("UTF-8"),
-        "stderr": out.stderr.decode("UTF-8"),
-    }
-
-
-def in_git_repo() -> bool:
-    return proc("git rev-parse --show-toplevel")["rc"] == 0
-
-
-def git_toplevel() -> Path:
-    return Path(proc("git rev-parse --show-toplevel")["stdout"])
-
-
-def git_repo_name(worktree_path: Path) -> str:
-    result = proc(f"git --work-tree {str(worktree_path).strip()} config --get remote.origin.url")
-    return Path(result["stdout"]).stem if result["rc"] == 0 else None
-
-
-def git_worktree_add(toplevel: Path, worktree_name: str) -> Path:
-    branch_path = f"{str(toplevel.parent).strip()}/{worktree_name}"
-    worktree_dir = str(toplevel).strip()
-    result = proc(f"git --work-tree {worktree_dir} worktree add {branch_path}")
-    if result["rc"] != 0:
-        raise SystemExit(Fore.RED + result["stderr"])
-    return Path(branch_path)
+    if out.returncode != 0:
+        raise SystemExit(f"{Fore.RED}{out.stdout.decode('UTF-8')}")
+    return out.stdout.decode("UTF-8")
+    #    return {
+    #        "rc": out.returncode,
+    #        "stdout": out.stdout.decode("UTF-8"),
+    #        "stderr": out.stderr.decode("UTF-8"),
+    #    }
 
 
 def open_in_tmux(worktree: Path) -> None:
@@ -63,9 +80,8 @@ def pull() -> None:
     pass
 
 
-def delete(flags) -> None:
-    if not in_git_repo():
-        raise SystemExit(Fore.RED + "Not in a Git repository")
+@read_git_repo
+def delete(flags, repo) -> None:
     git_worktree_list = proc("git worktree list --porcelain")
     if git_worktree_list["rc"] != 0:
         raise SystemExit(Fore.RED + git_worktree_list["stderr"])
